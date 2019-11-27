@@ -48,6 +48,7 @@ namespace IntellicCrypto
         /// <returns></returns>
         public byte[] CreateSignature(byte[] data, byte[] privateKey, string curveName)
         {
+            //Get the curve type ec parameters
             var ecp = TeleTrusTNamedCurves.GetByName(curveName);
             if (ecp == null)
             {
@@ -56,9 +57,19 @@ namespace IntellicCrypto
             var domainParameters = new ECDomainParameters(ecp.Curve, ecp.G, ecp.N, ecp.H, ecp.GetSeed());
             var myPriKey = new ECPrivateKeyParameters(new BigInteger(1, privateKey), domainParameters);
 
+            //Create the signer and initialize with private key
             var dsa = new ECDsaSigner();
             dsa.Init(true, myPriKey);
-            var signature = dsa.GenerateSignature(data);
+
+            //The signature halves must be equal in length
+            BigInteger[] signature;
+            do
+            {
+                signature = dsa.GenerateSignature(data);
+            }
+            while (signature[0].ToByteArrayUnsigned().Length != signature[1].ToByteArrayUnsigned().Length);
+
+            //Save both halves in a list
             var sign = new List<byte>();
             foreach (var bigInt in signature)
             {
@@ -67,6 +78,7 @@ namespace IntellicCrypto
                     sign.Add(bite);
                 }
             }
+
             return sign.ToArray();
         }
 
@@ -80,6 +92,7 @@ namespace IntellicCrypto
         /// <returns></returns>
         public bool VerifiySignature(byte[] data, byte[] signature, byte[] publicKey, string curveName)
         {
+            //Get curve type ec parameters
             var ecp = TeleTrusTNamedCurves.GetByName(curveName);
             if (ecp == null)
             {
@@ -88,6 +101,7 @@ namespace IntellicCrypto
             var domainParameters = new ECDomainParameters(ecp.Curve, ecp.G, ecp.N, ecp.H, ecp.GetSeed());
             var publicKeyParam = CreatePublicKeyParam(domainParameters, publicKey);
 
+            //Create the signer and initialize with public key
             var dsa = new ECDsaSigner();
             dsa.Init(false, publicKeyParam);
 
@@ -95,12 +109,7 @@ namespace IntellicCrypto
             var s = new BigInteger(1, signature.Skip(signature.Length / 2).ToArray());
 
             var verified = dsa.VerifySignature(data, r, s);
-            string verifedTextL = verified ? "Verified" : "not verified";
-
-            using (StreamWriter writer = File.AppendText("Working.txt"))
-            {
-                writer.WriteLine("{0}: {1}", curveName, verifedTextL);
-            }
+            
             return verified;
         }
 
@@ -120,7 +129,6 @@ namespace IntellicCrypto
             AsymmetricCipherKeyPair kp = null;
             ECPublicKeyParameters publicKey = null;
             bool success = false;
-            bool compress = false;
             while (!success)
             {
                 IAsymmetricCipherKeyPairGenerator kpg = GeneratorUtilities.GetKeyPairGenerator("ECDSA");
@@ -129,31 +137,15 @@ namespace IntellicCrypto
                 var ecP = new ECKeyGenerationParameters(parameters, new SecureRandom());
                 kpg.Init(ecP);
                 kp = kpg.GenerateKeyPair();
-                // The very old Problem... we need a certificate chain to
-                // save a private key...
-                publicKey = (ECPublicKeyParameters)kp.Public;
 
-                if (!compress)
-                {
-                    //pubKey.setPointFormat("UNCOMPRESSED");
-                    publicKey = SetPublicUncompressed(publicKey);
-                }
+                publicKey = (ECPublicKeyParameters)kp.Public;
+                publicKey = SetPublicUncompressed(publicKey);
 
                 byte[] x = publicKey.Q.AffineXCoord.ToBigInteger().ToByteArrayUnsigned();
                 byte[] y = publicKey.Q.AffineYCoord.ToBigInteger().ToByteArrayUnsigned();
                 if (x.Length == y.Length)
                 {
-                    var b = publicKey.Q.GetEncoded();
-                    var bs = Hex.ToHexString(b);
                     success = true;
-                    BigInteger xb = new BigInteger(1, x);
-                    BigInteger yb = new BigInteger(1, y);
-                   
-                    ECCurve curve = parameters.Curve;
-                    ECPoint q = curve.DecodePoint(b);
-
-                    ECPoint qb = curve.CreatePoint(xb, yb);
-                    curve.ValidatePoint(xb, yb); var k = new ECPublicKeyParameters(q, parameters);
                 }
             }
             ECPrivateKeyParameters privateKey = (ECPrivateKeyParameters)kp.Private;
@@ -161,7 +153,6 @@ namespace IntellicCrypto
             if (KeysVerified(privateKey, publicKey, curveName))
             {
                 var privateBytes = privateKey.D.ToByteArrayUnsigned();
-                var pubKey = Hex.ToHexString(publicKey.Q.AffineXCoord.ToBigInteger().ToByteArrayUnsigned()) + Hex.ToHexString(publicKey.Q.AffineYCoord.ToBigInteger().ToByteArrayUnsigned());
                 var pubKeyBytes = publicKey.Q.GetEncoded();
                 keyPair.Add(privateBytes);
                 keyPair.Add(pubKeyBytes);
@@ -221,14 +212,10 @@ namespace IntellicCrypto
         /// </summary>
         /// <param name="key"></param>
         /// <returns></returns>
-        private ECPublicKeyParameters SetPublicUncompressed(
-            ECPublicKeyParameters key)
+        private ECPublicKeyParameters SetPublicUncompressed(ECPublicKeyParameters key)
         {
             ECPoint p = key.Q.Normalize();
-            return new ECPublicKeyParameters(
-                key.AlgorithmName,
-                p.Curve.CreatePoint(p.XCoord.ToBigInteger(), p.YCoord.ToBigInteger()),
-                key.Parameters);
+            return new ECPublicKeyParameters(key.AlgorithmName,p.Curve.CreatePoint(p.XCoord.ToBigInteger(), p.YCoord.ToBigInteger()),key.Parameters);
         }
 
         /// <summary>
